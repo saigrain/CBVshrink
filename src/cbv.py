@@ -75,7 +75,7 @@ def correct_flux(flux, cbv, nB = 4, use = None, doPlot = True):
     else: cbv_ = cbv[:,:nB].T
     corrected_flux = np.copy(flux)
     l = np.isfinite(flux)
-    if use != None: l *= use
+    if not use is None: l *= use
     weights = fit_basis(flux[l].reshape((1,l.sum())), cbv_[:,l])
     corr = apply_basis(weights, cbv_).reshape(flux.shape)
     corrected_flux = flux - corr
