@@ -74,3 +74,15 @@ def cdpp(time, flux, dfilt = 2.0, bl_sz = 13, exclude=None, plot = False):
         pl.xlim(t.min(), t.max())
 
     return cdpp
+
+def medransig(array):
+    l = np.isfinite(array)
+    med = np.median(array[l])
+    norm = array / med
+    norm_s = np.sort(norm)
+    ng = l.sum()
+    ran = norm_s[int(ng*0.95)] - norm_s[int(ng*0.05)]
+    diff = norm[1:] - norm[:-1]
+    l = np.isfinite(diff)
+    sig = 1.48 * np.median(np.abs(diff[l]))
+    return med, ran, sig

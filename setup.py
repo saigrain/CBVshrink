@@ -9,6 +9,8 @@ setup(name='CBVshrink',
       author_email='suzanne.aigrain@gmail.com',
       url='https://github.com/saigrain/CBVshrink',
       package_dir={'cbvshrink':'src'},
-      packages=['cbvshrink']
+      scripts=['bin/cbvshrink'],
+      packages=['cbvshrink'],
+      install_requires=['numpy', 'scipy', 'astropy']
      )
 
