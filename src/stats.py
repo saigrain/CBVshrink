@@ -85,4 +85,4 @@ def medransig(array):
     diff = norm[1:] - norm[:-1]
     l = np.isfinite(diff)
     sig = 1.48 * np.median(np.abs(diff[l]))
-    return med, ran, sig
+    return med, ran * 1e6, sig * 1e6

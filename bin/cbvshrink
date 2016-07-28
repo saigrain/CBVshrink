@@ -6,7 +6,7 @@ import warnings
 
 from argparse import ArgumentParser
 from os.path import isdir, dirname, basename, abspath, join
-from cbvshrink.cbv import correct_flux
+from cbvshrink.cbv import fixed_nb, sel_nb
 from cbvshrink.stats import cdpp, medrandsig
 from glob import glob
 
@@ -32,6 +32,7 @@ def main():
     ap.add_argument('filename', type=str, help='input light curve file')
     ap.add_argument('cbvfile', type=str, help='input CBV file')
     ap.add_argument('--nBmax', type=int, default=8, help='max. no CBVs to use (default 8)')
+ap.add_argument('--nB', type=int, default=None, help='specific no. CBVs to use (default None, optimal nB selected automatically')
     ap.add_argument('--savedir', type=str, default='.', help='Directory to save the files in')
     ap.add_argument('--inplace', action='store_true', default=False, help='Modify the original files.')
     ap.add_argument('--logfile', type=str, default=None)
@@ -150,11 +151,37 @@ def reduce(filename, args):
     data = hdul[1].data
     time = data.field('TIME').astype('float64')
     sap = data.field('SAP_FLUX').astype('float64')
+    # Apply contamination and flux-loss corrections to SAP data
+    try:
+        crowd = hdul[1].header['CROWDSAP']
+    except KeyError:
+        crowd = np.nan
+    if np.isfinite(crowd):
+        l = np.isfinite(sap)
+        sap_med = np.median(sap[l])
+        crowd_corr = sap_med * (1.0 - crowd)
+    else: 
+        crowd_corr = 0.0
+    try:
+        flrfc = hdul[1].header['FLRFCSAP']
+    except KeyError:
+        flrfc = 1.0
+    if not np.isfinite(flrfc):
+        flrfc = 1.0
+    sap = (sap - crowd_corr) / flrfc
+    sap_cdpp = cdpp(sap)
+    sap_med, sap_ran, sap_sig = medransig(sap)
     pdc = data.field('PDCSAP_FLUX').astype('float64')
+    pdc_cdpp = cdpp(pdc)
+    pdc_med, pdc_ran, pdc_sig = medransig(pdc)
+    # pdc = pdc - pdc_med + sap_med
     if args.input_type == 'SAP':
         flux = sap.copy()
     elif args.input_type == 'JCR':
         flux = data.field('JCR_FLUX').astype('float64')
+        flux = (flux - crowd_corr) / flrfc
+        jcr_cdpp = cdpp(jcr)
+        jcr_med, jcr_ran, jcr_sig = medransig(pdc)
     else:
         lerror('Error: input type %s not supported', args.input_type)
         return
@@ -168,11 +195,8 @@ def reduce(filename, args):
     linfo(' KIC%d Q%d mod%d out%d.', kic, quarter, mod, out)
     linfo(' Using %s light curve as input', args.input_type)
     linfo(' Read in %d observations of which %d valid.', nobs, nval)
-    if args.plot_interactive:
-        linfo(' 6.5hr CDPP for SAP data: %d', cdpp(time, sap))
-        linfo(' 6.5hr CDPP for PDC data: %d', cdpp(time, pdc))
-        if args.input_type == 'JCR':
-            linfo(' 6.5hr CDPP for JCR data: %d', cdpp(time,flux))
+    linfo(' Median SAP flux after crowding and aperture loss corrections: %10.1f', sap_med)
+    linfo(' Median PDC flux: %10.1f', pdc_med)
     linfo('')
 
     # Read in CBV data
@@ -199,30 +223,62 @@ def reduce(filename, args):
     linfo('')
     linfo(' Applying correction')
     linfo(' -------------------')
-    nBmax = args.nBmax
-    mms = np.median(flux[np.isfinite(flux)])
-    fcor_arr = np.zeros((nBmax,nobs))
-    for i in np.arange(nBmax):
-        flux_cbv, weights = correct_flux(flux, cbv, nB = i + 1, use = None, \
-                                         doPlot = False)
-        mmc = np.median(flux_cbv[np.isfinite(flux_cbv)])
-        flux_cbv = flux_cbv - mmc + mms
-        fcor_arr[i,:] = flux_cbv
-        colname = 'CS%d_FLUX' % (i+1)
-        if colname in [c.name for c in data.columns]:
-            data[colname][:] = flux_cbv.astype(np.float32)
-        else:
-            hdul[1] = pf.BinTableHDU.from_columns(hdul[1].columns + pf.Column(name=colname, format='E', unit='e-/s', disp='E14.7', array=flux_cbv.astype(np.float32)), header = hdul[1].header)
-        # hdul[1].header['WTS_CS%d' % (i+1)]  = str([w for w in weights[0][:]])
-        if args.plot_interactive:
-            linfo(' 6.5hr CDPP after correction using %d CBVs: %d', \
-                      i+1, cdpp(time, flux_cbv))
+    res1, res2 = sel_nb(flux, cbv, args.nBmax, use = None)
+    nBopt, flux_cbv, weights = res1
+    flux_cbv_multi, res_cbv_multi = res2
+    cbv_med, cbv_ran, cbv_sig = medransig(flux_cbv)
+    flux_cbv = flux_cbv - med_sap + med_cbv
+    linfo('')
+    if args.plot_interactive:
+        linfo(' Statistics in ppm')
+        linfo(' %7s: %10s %10s %10s', \
+                  'version', '6.5h CDPP', 'range', 'scatter')
+        linfo(' %7s: %10d %10d %10d', 'SAP', sap_cdpp, sap_ran, sap_sig)
+        linfo(' %7s: %10d %10d %10d', 'PDC', pdc_cdpp, pdc_ran, pdc_sig)
+        if args.input_type == 'JCR':
+            linfo(' %7s: %10d %10d %10d', 'JCR', jcr_cdpp, jcr_ran, jcr_sig)
+        linfo(' %7s: %10d %10d %10d', 'CBV', cbv_cdpp, cbv_ran, cbv_sig)
 
     # Save results
     linfo('')
     linfo(' Saving results')
-    linfo(' -------------------')
-
+    linfo(' --------------')
+    hdul[1].header['CBV_NMAX'] = str(args.nBmax)
+    hdul[1].header['CBV_NB'] = str(nBopt)
+    hdul[1].header['CBV_WTS']  = str([w for w in weights[0][:]])
+    hdul[1].header['SAP_MED'] = str(sap_med)
+    hdul[1].header['SAP_CDPP'] = str(sap_cdpp)
+    hdul[1].header['SAP_RAN'] = str(sap_ran)
+    hdul[1].header['SAP_SIG'] = str(sap_sig)
+    hdul[1].header['PDC_CDPP'] = str(pdc_cdpp)
+    hdul[1].header['PDC_RAN'] = str(pdc_ran)
+    hdul[1].header['PDC_SIG'] = str(pdc_sig)
+    if args.flux_type is 'JCR':
+        hdul[1].header['JCR_CDPP'] = str(jcr_cdpp)
+        hdul[1].header['JCR_RAN'] = str(jcr_ran)
+        hdul[1].header['JCR_SIG'] = str(jcr_sig)
+    hdul[1].header['CBV_CDPP'] = str(cbv_cdpp)
+    hdul[1].header['CBV_RAN'] = str(cbv_ran)
+    hdul[1].header['CBV_SIG'] = str(cbv_sig)
+    cols = hdul[1].columns
+    if 'CBV_FLUX' in [c.name for c in data.columns]:
+        data['CBV_FLUX'][:] = flux_cbv.astype(np.float32)
+    else:
+        new_col = pf.Column(name='CBV_FLUX', format='E', unit='e-/s', \
+                                disp='E14.7', \
+                                array=flux_cbv.astype(np.float32))
+        cols = cols + new_col
+    for i in range(args.nBmax):
+        flux_cbv_c = flux_cbv_multi[i,:]
+        colname = 'CBV%dFLUX' % (i+1)
+        if colname in [c.name for c in data.columns]:
+        data[colname][:] = flux_cbv_c.astype(np.float32)
+    else:
+        new_col = pf.Column(name=colname, format='E', unit='e-/s', \
+                                disp='E14.7', \
+                                array=flux_cbv_c.astype(np.float32))
+        cols = cols + new_col
+    hdul[1] = pf.BinTableHDU.from_columns(cols, header = hdul[1].header)
     if args.inplace:
         hdul.flush()
     else:
@@ -231,6 +287,7 @@ def reduce(filename, args):
 
     linfo('')
     linfo(' CBVshrink correction finished succesfully')
+    linfo(' -----------------------------------------')
     linfo('')
 
     # Do plots
@@ -239,8 +296,6 @@ def reduce(filename, args):
         l = np.isfinite(time)
         tmin = time[l].min()
         tmax = time[l].max()
-        mmp = np.median(pdc[np.isfinite(pdc)])
-        pdc = pdc - mmp + mms
         diff1 = flux[1:] - flux[:-1]
         ll1 = np.isfinite(diff1)
         mm1 = np.median(diff1[ll1])
@@ -251,7 +306,7 @@ def reduce(filename, args):
         offset2 = 5 * 1.48 * np.median(abs(diff2[ll2] - mm2))
         pl.sca(ax1)
         pl.plot(time, flux, 'k-')
-        pl.plot(time, flux - pdc + mms - offset1, 'g-')
+        pl.plot(time, flux - pdc + sap_med - offset1, 'g-')
         pl.sca(ax2)
         pl.plot(time, pdc, 'g-')        
         for i in range(nBmax):
