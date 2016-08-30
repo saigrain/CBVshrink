@@ -92,8 +92,7 @@ def fixed_nb(flux, cbv, nB = 4, use = None, doPlot = True):
 
 def sel_nb(flux, cbv, nBmax = None, use = None):
     '''
-    (nb_opt, flux_opt, weights_opt, ran_opt, sig_opt),
-    (corr_flux_multi, weights_multi, ran_multi, sig_multi)
+    (nb_opt, flux_opt, weights_opt), (corr_flux_multi, weights_multi)
                 = sel_nb(flux, basis, nBmax = 8, use = None)
     Correct light curve for systematics using upt to nB CBVs 
     (automatically select best number).
@@ -134,7 +133,7 @@ def sel_nb(flux, cbv, nBmax = None, use = None):
         w_ext[:i+1] = w_c
         weights_multi[i,:] = w_ext
         corr = apply_basis(w_c, cbv_c).reshape(flux.shape)
-        c = flux - corr 
+        c = flux - corr
         med, ran, sig = medransig(c[l])
         corr_flux_multi[i,:] = c - med + med_raw
         ran_multi[i] = ran
@@ -153,173 +152,178 @@ def sel_nb(flux, cbv, nBmax = None, use = None):
     weights_opt = weights_multi[jj,:][:jj+1].flatten()
     ran_opt = ran_multi[jj]
     sig_opt = sig_multi[jj]
-    return (nb_opt, flux_opt, weights_opt, ran_opt, sig_opt), \
-      (corr_flux_multi, weights_multi, ran_multi, sig_multi)
+    return (nb_opt, flux_opt, weights_opt), \
+      (corr_flux_multi, weights_multi)
 
-def correct_file(infile, cbvfile, outfile, input_type = 'SAP', \
-                 exclude_func = None, exclude_func_par = None, doplot = False):
-    '''
-    time, cadence, corrected_flux = correct_file_nB(infile, cbvfile, outfile, \
-        input_type = 'SAP', exclude_func = None, \
-        exclude_func_par = None)
+# def correct_file(infile, cbvfile, outfile, input_type = 'SAP', \
+#                  verbose = False, doplot = False, #
+#                  exclude_func = None, exclude_func_par = None):
+#     '''
+#     time, cadence, corrected_flux = correct_file_nB(infile, cbvfile, outfile, \
+#         input_type = 'SAP', exclude_func = None, \
+#         exclude_func_par = None)
 
-    Correct light curve containined in infile using CBVs contained in
-    cbvfile, using up to nBmax CBVs
+#     Correct light curve containined in infile using CBVs contained in
+#     cbvfile, using up to nBmax CBVs
 
-    Inputs:
-        infile: input (FITS) light curve file
-        cbvfile: input (FITS) CBV file
-        outfile: output (FITS) file to save results in. This is a copy of the input
-            file with extra column 'CBV_FLUX', containing the systematics-corrected fluxes.
-            The weights associated with each CBV are saved in the header (CBVW_X, where
-            X is the index of the CBV to which the weight is applied). Also stored are
-            the range, point-to-point scatter and 6.5-hour CDPPs after correction
-            (RAN_CBV, SIG_CBV, and CDPP_CBV).
-    Optional inputs:
-        input_type: type of data to use as input. Options are:
-            SAP: "raw" (simple aperture photometry) data
-            JCR: "jump-corrected" data 
-        exclude_func: function f(t,par), which returns list of indices to ignore
-        exclude_func_par: parameters of exclude function
-        doplot: if True, produce plots on screen showing the evolution of the correction
-            as more CBVs are added
-    '''
-    nBmax = 8
-    # Read in light curve data
-    h1 = pyfits.open(infile, mode = 'readonly')
-    kic = h1[0].header['KEPLERID']
-    quarter = h1[0].header['QUARTER']
-    module = h1[0].header['MODULE']
-    output = h1[0].header['OUTPUT']
-    print 'Reading in quarter %d light curve data for KIC %d.' % (quarter, kic)
-    print 'Object is located on module %d, output channel %d.' \
-      % (module, output)
-    if input_type == 'SAP':
-        print 'Reading SAP data'
-        flux = h1[1].data.field('SAP_FLUX').astype('float64')
-    elif input_type == 'JCR':
-        print 'Reading JCR data'
-        flux = h1[1].data.field('JCR_FLUX').astype('float64')
-    else:
-        print 'Error: input type %s not supported'
-        return
-    time = h1[1].data.field('TIME').astype('float64')
-    pdc = h1[1].data.field('PDCSAP_FLUX').astype('float64')
-    if doplot == True:
-        pl.clf()
-        l = np.isfinite(time)
-        tmin = time[l].min()
-        tmax = time[l].max()
-    nobs = len(flux)
-    l = np.isfinite(flux)
-    nval = l.sum()
-    print 'Read in %d observations of which %d valid.' % (nobs, nval)
-    # Read in CBV data
-    cbv = np.zeros((nobs, 16))
-    h2 = pyfits.open(cbvfile)
-    if h2[0].header['QUARTER'] != quarter:
-        print 'Error: CBV file is for quarter %d.' % h2[0].header['QUARTER']
-        return
-    n_ext = len(h2) - 1
-    for i in np.arange(n_ext)+1:
-        if h2[i].header['MODULE'] != module: continue
-        if h2[i].header['OUTPUT'] != output: continue
-        for j in np.arange(16):
-            cbv[:,j] = h2[i].data.field('VECTOR_%d' % (j+1)).astype('float64')
-        break
-    h2.close()
-    # Identify any observations to ignore
-    if exclude_func != None:
-        if exclude_func_par == None:
-            exclude_indices = exclude_func(time)
-        else:
-            exclude_indices = exclude_func(time, exclude_func_par)
-        use = np.ones(nobs, 'bool')
-        use[exclude_indices] = False
-    else:
-        use = None
-    # Stats before correction - store in header keywords
-    mms, sap_ran, sap_sig = medransig(flux[np.isfinite(flux)])
-    print 'Median flux: %f' % mms
-    h1[1].header['MED_FLUX'] = repr(mms)
-    print 'Input range: %f' % sap_ran
-    h1[1].header['SAP_RAN'] = repr(sap_ran)
-    print 'Input p2p scatter: %f' % sap_sig  
-    h1[1].header['SAP_SIG'] = repr(sap_sig)
-    sap_cdpp = cdpp(time, flux)
-    print 'Input CDPP: %f' % sap_cdpp
-    h1[1].header['SAP_CDPP'] = repr(sap_cdpp)
-    mmp = np.median(pdc[np.isfinite(pdc)])
-    pdc = pdc - mmp + mms
-    _, pdc_ran, pdc_sig = medransig(flux[np.isfinite(pdc)])
-    print 'PDC range: %f' % pdc_ran
-    h1[1].header['PDC_RAN'] = repr(PDC_RAN)
-    print 'PDC p2p scatter: %f' % pdc_sig  
-    h1[1].header['PDC_SIG'] = repr(PDC_SIG)
-    pdc_cdpp = cdpp(time, pdc)
-    print 'PDC CDPP: %f' % pdc_cdpp
-    h1[1].header['PDC_CDPP'] = repr(PDC_CDPP)
-    # Preliminary plotting commands
-    if doplot == True:
-        ax1 = pl.subplot(211)
-        diff1 = flux[1:] - flux[:-1]
-        ll1 = np.isfinite(diff1)
-        mm1 = np.median(diff1[ll1])
-        offset1 = 5 * 1.48 * np.median(abs(diff1 - mm1))
-        pl.plot(time, flux, 'k-')
-        pl.plot(time, flux - pdc + mms - offset1, 'g-')
-        pl.ylabel('raw flux')
-        pl.title('KID%d Q%d (module %d output %d)' % (kic, quarter, module, output))
-        ax2 = pl.subplot(212, sharex = ax1)
-        pl.plot(time, pdc, 'g-')        
-        diff2 = pdc[1:] - pdc[:-1]
-        ll2 = np.isfinite(diff2)
-        mm2 = np.median(diff2[ll2])
-        offset2 = 5 * 1.48 * np.median(abs(diff2 - mm2))
-        pl.ylabel('corr. flux')
-        pl.xlabel('time')
-    # Perform correction
-    (nb, flux_cbv, weights, ran, sig), \
-      (flux_multi, _, _, _) = \
-      sel_nb(flux, cbv, nBmax = nBmax, use = use)
-    # Plot results for individual nB values, if requested
-    if doplot == True:
-        for i in np.arange(nBmax):
-            flux_cbv = corr_flux_multi[i,:].flatten()
-            mmc = np.median(flux_cbv[np.isfinite(flux_cbv)])
-            flux_cbv = flux_cbv - mmc + mms
-            corr = flux - flux_cbv + mms
-            dr = i/float(nBmax-1)
-            rgb = (1-dr,0,dr)
-            pl.sca(ax1)
-            pl.plot(time, corr - offset1 * (i+2), c = rgb)
-            pl.sca(ax2)
-            pl.plot(time, flux_cbv - offset2 * (i+1), c = rgb)
-        pl.xlim(tmin, tmax)
-    # Store results in relevant FITS column and header keywords
-    print 'Optimal no. CBVs: %d' % nb
-    h1[1].header['CBV_NSEL'] = repr(nb)
-    print 'Weights:', weights
-    for i in range(nb):
-        h1[1].header['CBVW_%02d' % i] = repr(weights[i])
-    print 'CBV range: %f' % cbv_ran
-    h1[1].header['CBV_RAN'] = repr(cbv_ran)
-    print 'CBV p2p scatter: %f' % cbv_sig  
-    h1[1].header['CBV_SIG'] = repr(cbv_sig)
-    mmc = np.median(flux_cbv[np.isfinite(flux_cbv)])
-    flux_cbv = flux_cbv - mmc + mms
-    cbv_cdpp = cdpp(time, flux_cbv)
-    print 'CBV CDPP: %f' % CBV_cdpp
-    h1[1].header['CBV_CDPP'] = repr(CBV_CDPP)
-    unit = h1[1].header['TUNIT4']
-    cols = h1[1].columns
-    col = pyfits.Column(name = 'CBV_FLUX', format = 'E', disp = 'E14.7', unit = unit, \
-                        array = flux_cbv)
-    cols += col
-    # Save
-    hdr_save = h1
-    h1[1] = pyfits.BinTableHDU.from_columns(cols, header=h1[1].header)
-    print 'Saving to file %s' % outfile
-    h1.writeto(outfile, clobber = True)
-    h1.close()
-    return 
+#     Inputs:
+#         infile: input (FITS) light curve file
+#         cbvfile: input (FITS) CBV file
+#         outfile: output (FITS) file to save results in. This is a copy of the input
+#             file with extra column 'CBV_FLUX', containing the systematics-corrected fluxes.
+#             The weights associated with each CBV are saved in the header (CBVW_X, where
+#             X is the index of the CBV to which the weight is applied). Also stored are
+#             the range, point-to-point scatter and 6.5-hour CDPPs after correction
+#             (RAN_CBV, SIG_CBV, and CDPP_CBV).
+#     Optional inputs:
+#         input_type: type of data to use as input. Options are:
+#             SAP: "raw" (simple aperture photometry) data
+#             JCR: "jump-corrected" data 
+#         verbose: toggle to produce more / less text output
+#         doplot: toggle to produce plots on screen showing the evolution of the correction
+#         exclude_func: function f(t,par), which returns list of indices to ignore
+#         exclude_func_par: parameters of exclude function
+#             as more CBVs are added
+#     '''
+#     nBmax = 8
+#     # Read in light curve data
+#     h1 = pyfits.open(infile, mode = 'readonly')
+#     kic = h1[0].header['KEPLERID']
+#     quarter = h1[0].header['QUARTER']
+#     module = h1[0].header['MODULE']
+#     output = h1[0].header['OUTPUT']
+#     if verbose:
+#         print 'Reading in quarter %d light curve data for KIC %d.' % \
+#             (quarter, kic)
+#         print 'Object is located on module %d, output channel %d.' \
+#       % (module, output)
+#     if input_type == 'SAP':
+#         if verbose: print 'Reading SAP data'
+#         flux = h1[1].data.field('SAP_FLUX').astype('float64')
+#     elif input_type == 'JCR':
+#         if verbose: print 'Reading JCR data'
+#         flux = h1[1].data.field('JCR_FLUX').astype('float64')
+#     else:
+#         print 'Error: input type %s not supported'
+#         return
+#     time = h1[1].data.field('TIME').astype('float64')
+#     pdc = h1[1].data.field('PDCSAP_FLUX').astype('float64')
+#     if doplot == True:
+#         pl.clf()
+#         l = np.isfinite(time)
+#         tmin = time[l].min()
+#         tmax = time[l].max()
+#     nobs = len(flux)
+#     l = np.isfinite(flux)
+#     nval = l.sum()
+#     print 'Read in %d observations of which %d valid.' % (nobs, nval)
+#     # Read in CBV data
+#     cbv = np.zeros((nobs, 16))
+#     h2 = pyfits.open(cbvfile)
+#     if h2[0].header['QUARTER'] != quarter:
+#         print 'Error: CBV file is for quarter %d.' % h2[0].header['QUARTER']
+#         return
+#     n_ext = len(h2) - 1
+#     for i in np.arange(n_ext)+1:
+#         if h2[i].header['MODULE'] != module: continue
+#         if h2[i].header['OUTPUT'] != output: continue
+#         for j in np.arange(16):
+#             cbv[:,j] = h2[i].data.field('VECTOR_%d' % (j+1)).astype('float64')
+#         break
+#     h2.close()
+#     # Identify any observations to ignore
+#     if exclude_func != None:
+#         if exclude_func_par == None:
+#             exclude_indices = exclude_func(time)
+#         else:
+#             exclude_indices = exclude_func(time, exclude_func_par)
+#         use = np.ones(nobs, 'bool')
+#         use[exclude_indices] = False
+#     else:
+#         use = None
+#     # Stats before correction - store in header keywords
+#     mms, sap_ran, sap_sig = medransig(flux[np.isfinite(flux)])
+#     if verbose: print 'Median flux: %f' % mms
+#     h1[1].header['MED_FLUX'] = repr(mms)
+#     if verbose: print 'Input range: %f' % sap_ran
+#     h1[1].header['SAP_RAN'] = repr(sap_ran)
+#     if verbose: print 'Input p2p scatter: %f' % sap_sig  
+#     h1[1].header['SAP_SIG'] = repr(sap_sig)
+#     sap_cdpp = cdpp(time, flux)
+#     if verbose: print 'Input CDPP: %f' % sap_cdpp
+#     h1[1].header['SAP_CDPP'] = repr(sap_cdpp)
+#     mmp = np.median(pdc[np.isfinite(pdc)])
+#     pdc = pdc - mmp + mms
+#     _, pdc_ran, pdc_sig = medransig(pdc[np.isfinite(pdc)])
+#     if verbose: print 'PDC range: %f' % pdc_ran
+#     h1[1].header['PDC_RAN'] = repr(pdc_ran)
+#     if verbose: print 'PDC p2p scatter: %f' % pdc_sig  
+#     h1[1].header['PDC_SIG'] = repr(pdc_sig)
+#     pdc_cdpp = cdpp(time, pdc)
+#     if verbose: print 'PDC CDPP: %f' % pdc_cdpp
+#     h1[1].header['PDC_CDPP'] = repr(pdc_cdpp)
+#     # Preliminary plotting commands
+#     if doplot == True:
+#         ax1 = pl.subplot(211)
+#         diff1 = flux[1:] - flux[:-1]
+#         ll1 = np.isfinite(diff1)
+#         mm1 = np.median(diff1[ll1])
+#         offset1 = 5 * 1.48 * np.median(abs(diff1[ll1] - mm1))
+#         pl.plot(time, flux, 'k-')
+#         pl.plot(time, flux - pdc + mms - offset1, 'g-')
+#         pl.ylabel('raw flux')
+#         pl.title('KID%d Q%d (module %d output %d)' % \
+#                      (kic, quarter, module, output))
+#         ax2 = pl.subplot(212, sharex = ax1)
+#         pl.plot(time, pdc, 'g-')        
+#         diff2 = pdc[1:] - pdc[:-1]
+#         ll2 = np.isfinite(diff2)
+#         mm2 = np.median(diff2[ll2])
+#         offset2 = 5 * 1.48 * np.median(abs(diff2[ll2] - mm2))
+#         pl.ylabel('corr. flux')
+#         pl.xlabel('time')
+#     # Perform correction
+#     (nb, flux_cbv, weights, cbv_ran, cbv_sig), \
+#       (flux_multi, _, _, _) = \
+#       sel_nb(flux, cbv, nBmax = nBmax, use = use)
+#     # Plot results for individual nB values, if requested
+#     if doplot == True:
+#         for i in np.arange(nBmax):
+#             flux_cbv = flux_multi[i,:].flatten()
+#             mmc = np.median(flux_cbv[np.isfinite(flux_cbv)])
+#             flux_cbv = flux_cbv - mmc + mms
+#             corr = flux - flux_cbv + mms
+#             dr = i/float(nBmax-1)
+#             rgb = (1-dr,0,dr)
+#             pl.sca(ax1)
+#             pl.plot(time, corr - offset1 * (i+2), c = rgb)
+#             pl.sca(ax2)
+#             pl.plot(time, flux_cbv - offset2 * (i+1), c = rgb)
+#         pl.xlim(tmin, tmax)
+#     # Store results in relevant FITS column and header keywords
+#     if verbose: print 'Optimal no. CBVs: %d' % nb
+#     h1[1].header['CBV_NSEL'] = repr(nb)
+#     if verbose: print 'Weights:', weights
+#     for i in range(nb):
+#         h1[1].header['CBVW_%02d' % i] = repr(weights[i])
+#     if verbose: print 'CBV range: %f' % cbv_ran
+#     h1[1].header['CBV_RAN'] = repr(cbv_ran)
+#     if verbose: print 'CBV p2p scatter: %f' % cbv_sig  
+#     h1[1].header['CBV_SIG'] = repr(cbv_sig)
+#     mmc = np.median(flux_cbv[np.isfinite(flux_cbv)])
+#     flux_cbv = flux_cbv - mmc + mms
+#     cbv_cdpp = cdpp(time, flux_cbv)
+#     if verbose: print 'CBV CDPP: %f' % cbv_cdpp
+#     h1[1].header['CBV_CDPP'] = repr(cbv_cdpp)
+#     unit = h1[1].header['TUNIT4']
+#     cols = h1[1].columns
+#     col = pyfits.Column(name = 'CBV_FLUX', format = 'E', disp = 'E14.7', \
+#                         unit = unit, array = flux_cbv)
+#     cols += col
+#     # Save
+#     hdr_save = h1
+#     h1[1] = pyfits.BinTableHDU.from_columns(cols, header=h1[1].header)
+#     if verbose: print 'Saving to file %s' % outfile
+#     h1.writeto(outfile, clobber = True)
+#     h1.close()
+#     return 
