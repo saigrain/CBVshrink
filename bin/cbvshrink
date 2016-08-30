@@ -296,6 +296,7 @@ def reduce(filename, args):
         l = np.isfinite(time)
         tmin = time[l].min()
         tmax = time[l].max()
+        pdc = pdc - pdc_med + sap_med
         diff1 = flux[1:] - flux[:-1]
         ll1 = np.isfinite(diff1)
         mm1 = np.median(diff1[ll1])
@@ -310,15 +311,17 @@ def reduce(filename, args):
         pl.sca(ax2)
         pl.plot(time, pdc, 'g-')        
         for i in range(nBmax):
+            if nBopt == i+1: lw = 2
+            else: lw = 1
             pl.sca(ax1)
             flux_cbv = fcor_arr[i,:].flatten()
             corr = flux - flux_cbv + mms
             dr = i/float(nBmax-1)
             rgb = (1-dr,0,dr)
             pl.sca(ax1)
-            pl.plot(time, corr - offset1 * (i+2), c = rgb)
+            pl.plot(time, corr - offset1 * (i+2), c = rgb, lw = lw)
             pl.sca(ax2)
-            pl.plot(time, flux_cbv - offset2 * (i+1), c = rgb)
+            pl.plot(time, flux_cbv - offset2 * (i+1), c = rgb, lw = lw)
         pl.setp(ax1, ylabel='raw flux', \
                     title = 'KID%d Q%d mod%d out%d)' % \
                     (kic, quarter, mod, out))
